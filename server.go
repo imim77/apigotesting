@@ -102,7 +102,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		Type:       "HELLO",
 		Client:     client.GetPublicInfo(),
 		Peers:      res.Peers,
-		IceServers: buildIceServers(s.cfg, r, s.turnServer != nil),
+		IceServers: buildIceServers(s.cfg, r, false),
 	}
 	if err := client.SendJSON(hello); err != nil {
 		log.Printf("[%s] failed to send HELLO: %v", client.ClientId, err)
