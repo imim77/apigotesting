@@ -1,0 +1,130 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+
+	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
+)
+
+type HelloMessage struct {
+	Type       string          `json:"type"`
+	Client     ClientInfo      `json:"client"`
+	Peers      []ClientInfo    `json:"peers"`
+	IceServers []IceServerInfo `json:"iceServers,omitempty"`
+}
+
+type IceServerInfo struct {
+	URLs       []string `json:"urls"`
+	Username   string   `json:"username,omitempty"`
+	Credential string   `json:"credential,omitempty"`
+}
+
+type JoinMessage struct {
+	Type string     `json:"type"`
+	Peer ClientInfo `json:"peer"`
+}
+
+type Config struct {
+	Host string
+	Port string
+}
+
+type Server struct {
+	cfg        *Config
+	core       *Core
+	httpServer *http.Server
+}
+
+func defaultIceServers() []IceServerInfo {
+	return []IceServerInfo{
+		{
+			URLs: []string{"stun:stun.l.google.com:19302"},
+		},
+	}
+}
+
+func NewServer(cfg *Config) (*Server, error) {
+	core := NewCore()
+	srv := &Server{cfg: cfg, core: core}
+	srv.httpServer = &http.Server{
+		Addr:    net.JoinHostPort(cfg.Host, cfg.Port),
+		Handler: srv,
+	}
+	return srv, nil
+}
+
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.applyCORS(w)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	switch r.URL.Path {
+	case "/healthz":
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	case "/ws":
+		s.handleWebSocket(w, r)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (s *Server) applyCORS(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+}
+
+func (s *Server) Start() error {
+	if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return fmt.Errorf("http server error: %w", err)
+	}
+	return nil
+}
+
+func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	wsUpgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	conn, err := wsUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("error upgrading to websocket: %v", err)
+		http.Error(w, "failed to upgrade to websocket", http.StatusBadRequest)
+		return
+	}
+	client := NewClient(uuid.New(), conn, s.core)
+	log.Printf("Client connected: %s (%s)", client.ClientId, conn.RemoteAddr())
+	res, err := s.core.Register(client)
+	if err != nil {
+		log.Printf("failed to register client %s: %v", client.ClientId, err)
+		conn.Close()
+		return
+	}
+	client.loop()
+	hello := HelloMessage{
+		Type:       "HELLO",
+		Client:     client.GetPublicInfo(),
+		Peers:      res.Peers,
+		IceServers: defaultIceServers(),
+	}
+	if err := client.SendJSON(hello); err != nil {
+		log.Printf("[%s] failed to send HELLO: %v", client.ClientId, err)
+		_ = s.core.Unregister(client.ClientId)
+		return
+	}
+
+	join := JoinMessage{Type: "JOIN", Peer: client.GetPublicInfo()}
+	joinData, _ := json.Marshal(join)
+
+	for _, peer := range res.Existing {
+		if err := peer.Send(joinData); err != nil {
+			log.Printf("[%s] failed to notify peer %s: %v", client.ClientId, peer.ClientId, err)
+		}
+	}
+	log.Printf("client %s actor started, handling messages independently", client.ClientId)
+}
