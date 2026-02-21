@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/pion/turn/v4"
 )
 
 type HelloMessage struct {
@@ -30,27 +31,33 @@ type JoinMessage struct {
 }
 
 type Config struct {
-	Host string
-	Port string
+	Host         string
+	Port         string
+	PublicHost   string
+	PublicIp     string
+	TURNPort     string
+	TURNRealm    string
+	TURNSecret   string
+	RelayPortMin uint16
+	RelayPortMax uint16
 }
 
 type Server struct {
 	cfg        *Config
 	core       *Core
+	turnServer *turn.Server
 	httpServer *http.Server
-}
-
-func defaultIceServers() []IceServerInfo {
-	return []IceServerInfo{
-		{
-			URLs: []string{"stun:stun.l.google.com:19302"},
-		},
-	}
 }
 
 func NewServer(cfg *Config) (*Server, error) {
 	core := NewCore()
-	srv := &Server{cfg: cfg, core: core}
+
+	turnServer, err := startTURN(cfg)
+	if err != nil {
+		log.Printf("warning: TURN disabled: %v", err)
+	}
+
+	srv := &Server{cfg: cfg, core: core, turnServer: turnServer}
 	srv.httpServer = &http.Server{
 		Addr:    net.JoinHostPort(cfg.Host, cfg.Port),
 		Handler: srv,
@@ -59,27 +66,12 @@ func NewServer(cfg *Config) (*Server, error) {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s.applyCORS(w)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-
 	switch r.URL.Path {
-	case "/healthz":
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
 	case "/ws":
 		s.handleWebSocket(w, r)
 	default:
 		http.NotFound(w, r)
 	}
-}
-
-func (s *Server) applyCORS(w http.ResponseWriter) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 }
 
 func (s *Server) Start() error {
@@ -110,7 +102,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		Type:       "HELLO",
 		Client:     client.GetPublicInfo(),
 		Peers:      res.Peers,
-		IceServers: defaultIceServers(),
+		IceServers: buildIceServers(s.cfg, r, s.turnServer != nil),
 	}
 	if err := client.SendJSON(hello); err != nil {
 		log.Printf("[%s] failed to send HELLO: %v", client.ClientId, err)

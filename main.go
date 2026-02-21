@@ -12,13 +12,15 @@ import (
 func run(ctx context.Context, stdout, stderr io.Writer) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt)
 	defer cancel()
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "9000"
-	}
 	cfg := Config{
-		Host: "0.0.0.0",
-		Port: port,
+		Host:         "",
+		Port:         "9000",
+		TURNPort:     "3478",
+		TURNRealm:    "justdrop",
+		TURNSecret:   "change-me-in-production",
+		PublicHost:   "",
+		RelayPortMin: 49152,
+		RelayPortMax: 65535,
 	}
 
 	srv, err := NewServer(&cfg)
