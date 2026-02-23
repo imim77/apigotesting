@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -24,17 +25,22 @@ func run(ctx context.Context, stdout, stderr io.Writer) error {
 
 	relayPortMin, _ := strconv.ParseUint(os.Getenv("RELAYPORTMIN"), 10, 16)
 	relayPortMax, _ := strconv.ParseUint(os.Getenv("RELAYPORTMAX"), 10, 16)
+	externalIceServers, err := parseExternalIceServers(os.Getenv("EXTERNAL_ICE_SERVERS_JSON"))
+	if err != nil {
+		return fmt.Errorf("failed to parse EXTERNAL_ICE_SERVERS_JSON: %w", err)
+	}
 
 	cfg := Config{
-		Host:         os.Getenv("HOST"),
-		Port:         os.Getenv("PORT"),
-		TURNPort:     os.Getenv("TURNPORT"),
-		TURNRealm:    os.Getenv("TURNREALM"),
-		TURNSecret:   os.Getenv("TURNSECRET"),
-		PublicHost:   os.Getenv("PUBLICHOST"),
-		PublicIp:     os.Getenv("PUBLICIP"),
-		RelayPortMin: uint16(relayPortMin),
-		RelayPortMax: uint16(relayPortMax),
+		Host:               os.Getenv("HOST"),
+		Port:               os.Getenv("PORT"),
+		TURNPort:           os.Getenv("TURNPORT"),
+		TURNRealm:          os.Getenv("TURNREALM"),
+		TURNSecret:         os.Getenv("TURNSECRET"),
+		PublicHost:         os.Getenv("PUBLICHOST"),
+		PublicIp:           os.Getenv("PUBLICIP"),
+		RelayPortMin:       uint16(relayPortMin),
+		RelayPortMax:       uint16(relayPortMax),
+		ExternalIceServers: externalIceServers,
 	}
 
 	srv, err := NewServer(&cfg)
@@ -50,6 +56,25 @@ func run(ctx context.Context, stdout, stderr io.Writer) error {
 	<-ctx.Done()
 	return nil
 
+}
+
+func parseExternalIceServers(raw string) ([]IceServerInfo, error) {
+	if raw == "" {
+		return nil, nil
+	}
+
+	var servers []IceServerInfo
+	if err := json.Unmarshal([]byte(raw), &servers); err != nil {
+		return nil, err
+	}
+
+	for i, server := range servers {
+		if len(server.URLs) == 0 {
+			return nil, fmt.Errorf("entry %d has empty urls", i)
+		}
+	}
+
+	return servers, nil
 }
 
 func main() {

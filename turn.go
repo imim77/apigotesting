@@ -133,6 +133,10 @@ func getIceHost(cfg *Config, r *http.Request) string {
 }
 
 func buildIceServers(cfg *Config, r *http.Request, includeTURN bool) []IceServerInfo {
+	if len(cfg.ExternalIceServers) > 0 {
+		return cfg.ExternalIceServers
+	}
+
 	if !includeTURN {
 		return []IceServerInfo{{URLs: []string{"stun:stun.l.google.com:19302"}}}
 	}

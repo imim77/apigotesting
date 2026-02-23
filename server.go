@@ -31,15 +31,16 @@ type JoinMessage struct {
 }
 
 type Config struct {
-	Host         string
-	Port         string
-	PublicHost   string
-	PublicIp     string
-	TURNPort     string
-	TURNRealm    string
-	TURNSecret   string
-	RelayPortMin uint16
-	RelayPortMax uint16
+	Host               string
+	Port               string
+	PublicHost         string
+	PublicIp           string
+	TURNPort           string
+	TURNRealm          string
+	TURNSecret         string
+	RelayPortMin       uint16
+	RelayPortMax       uint16
+	ExternalIceServers []IceServerInfo
 }
 
 type Server struct {
@@ -52,9 +53,15 @@ type Server struct {
 func NewServer(cfg *Config) (*Server, error) {
 	core := NewCore()
 
-	turnServer, err := startTURN(cfg)
-	if err != nil {
-		log.Printf("warning: TURN disabled: %v", err)
+	var turnServer *turn.Server
+	if len(cfg.ExternalIceServers) == 0 {
+		var err error
+		turnServer, err = startTURN(cfg)
+		if err != nil {
+			log.Printf("warning: TURN disabled: %v", err)
+		}
+	} else {
+		log.Printf("using external ICE server list (%d entries)", len(cfg.ExternalIceServers))
 	}
 
 	srv := &Server{cfg: cfg, core: core, turnServer: turnServer}
@@ -102,7 +109,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		Type:       "HELLO",
 		Client:     client.GetPublicInfo(),
 		Peers:      res.Peers,
-		IceServers: buildIceServers(s.cfg, r, false),
+		IceServers: buildIceServers(s.cfg, r, s.turnServer != nil),
 	}
 	if err := client.SendJSON(hello); err != nil {
 		log.Printf("[%s] failed to send HELLO: %v", client.ClientId, err)
